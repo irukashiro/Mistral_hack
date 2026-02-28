@@ -1,171 +1,189 @@
 # 大富豪 - Mistral AI版 🎴
 
 StreamlitとMistral AIを使った大富豪（Daifugo）のトランプゲームです。
+AIキャラクターとの会話・同盟・心理戦を楽しめます。
 
-## 概要
+---
 
-大富豪は日本の伝統的なトランプゲームで、プレイヤーは前に出されたカードより強いカードを出す必要があります。このバージョンではMistral AIが他のプレイヤーの役割を果たし、心理戦や戦略的なゲームプレイを行います。
+## 機能一覧
 
-## 機能
+### コアゲーム
+- **4人プレイヤー対応**: 人間1人 + 最大3人のAIプレイヤー
+- **大富豪ルール**: ♠3スタート、同ランク複数枚、パス、場のリセット
+- **Mistral AI統合**: AIがゲーム状況を分析して最適な手を決定
 
-- **4人プレイヤー対応**: 人間プレイヤーと最大3人のAIプレイヤー
-- **Mistral AI統合**: AIプレイヤーが自然言語処理を使ってゲーム戦略を決定
-- **直感的なUI**: Streamlitベースの使いやすいインターフェース
-- **ゲーム状況の可視化**: 各プレイヤーの手札枚数、現在の場、ゲームログ
+### ズルフェーズ
+全員パスで発動する心理戦フェーズ:
+- **手口**: 盗み見 / カード交換 / スキップ / 押し付け
+- **2D6ロール対決**: Mistralがズルと対策の強度を評価してボーナスを付与
+- **バレ判定**: ズル失敗で最下位確定
 
-## インストール
+### AI個性システム（新機能）
+ゲーム開始時にMistralが各AIのキャラクターを自動生成:
+- **キャラクター名・性格・話し方・プロフィール**
+- **パラメータ**: ズル傾向 / 協力傾向 / 正直度 / 攻撃性
+- AIはその個性に沿って会話・判断・行動する
+
+### インタラクションシステム（新機能）
+右パネルからいつでも相手と交流できる:
+
+| アクション | 効果 |
+|---|---|
+| 💬 会話 | AIキャラが個性に応じて返答。関係値+2 |
+| 👀 観察 | 戦略ヒントを取得（AIの正直度次第で嘘も）。関係値-5 |
+| 🤝 同盟 | 相手の協力傾向と関係値で成功確率が変わる。成功で関係値+20 |
+| 🎯 告発 | 「ズルしてるよね」。関係値-10。捕まっていれば証拠あり |
+| ⚔️ 同盟破棄 | 同盟解消。関係値-20 |
+
+### 関係値システム（新機能）
+プレイヤー間の関係値（-100〜+100）がゲームに影響:
+
+| 値 | 状態 | 効果 |
+|---|---|---|
+| +60〜+100 | 🤝 同盟 | ズルボーナス+1（味方） |
+| +30〜+59 | 😊 友好 | 通常 |
+| -29〜+29 | 😐 中立 | 通常 |
+| -30〜-59 | 😒 警戒 | ズルターゲット優先度UP |
+| -60〜-100 | 😡 敵対 | ズル確率・攻撃性UP |
+
+### AI自発アクション（新機能）
+AIのターン後、20%の確率で自発的に:
+- 話しかける（chat）
+- 同盟提案（cooperate）
+- 告発（accuse）
+
+---
+
+## セットアップ
 
 ### 前提条件
 - Python 3.8以上
-- Mistral API キー
+- Mistral API キー（[console.mistral.ai](https://console.mistral.ai/) で取得）
 
-### セットアップ手順
+### インストール
 
-1. **リポジトリを複製**
 ```bash
+git clone https://github.com/irukashiro/Mistral_hack.git
 cd Mistral_hack
-```
 
-2. **仮想環境を作成（推奨）**
-```bash
 python -m venv venv
 source venv/Scripts/activate  # Windows
-# または
-source venv/bin/activate  # macOS/Linux
-```
+# source venv/bin/activate    # macOS/Linux
 
-3. **依存関係をインストール**
-```bash
 pip install -r requirements.txt
 ```
 
-4. **環境変数を設定**
+### 環境変数の設定
+
 ```bash
 # .env ファイルを作成
-cp .env.example .env
-
-# .env ファイルを編集して、Mistral API キーを設定
-# MISTRAL_API_KEY=your_actual_api_key_here
+echo MISTRAL_API_KEY=your_actual_api_key_here > .env
 ```
 
-## 使用方法
+または起動後にサイドバーのAPIキー入力欄に貼り付けることもできます。
 
-### Streamlitアプリを起動
+### 起動
+
 ```bash
 streamlit run app.py
 ```
 
-ブラウザが自動的に開き、アプリケーションが表示されます。（通常は http://localhost:8501）
+ブラウザが自動で開きます（デフォルト: http://localhost:8501）
+
+---
 
 ## ゲームの流れ
 
-1. **ゲーム開始**: サイドバーで設定し、「ゲームを開始」をクリック
-2. **手札表示**: 自分の手札がカードボタンで表示されます
-3. **カード選択**: クリックしてカードを選択（複数枚可）
-4. **アクション実行**:
-   - 🎯 **カードを出す**: 選択したカードをプレイ
-   - 🚫 **パス**: カードを出さない
-   - 🔄 **リセット**: 選択をクリア
-5. **AI の順番**: 自動でAIが手を決定・実行
-6. **ゲーム終了**: 最終順位が表示されます
+1. **設定**: サイドバーでプレイヤー数・AI使用を設定して「ゲームを開始」
+2. **個性生成**: Mistralが各AIのキャラクターを自動生成（数秒）
+3. **ゲームプレイ**: 左パネルでカードを選んでプレイ / パス
+4. **インタラクション**: 右パネルでAIと会話・観察・同盟交渉
+5. **ズルフェーズ**: 全員パス時に発動。作戦を選んでズルを実行
+6. **終了**: 手札がなくなった順に順位確定
 
-## ゲームルール
-
-### 基本ルール
-- **開始**: 3のスペードを持つプレイヤーが最初にカードを出す
-- **カード出し**: 前に出されたカードより強いランクのカードを出す
-- **複数枚**: 同じランクの複数枚（ペア、トリプル）でプレイすることも可能
-- **パス**: カードを出せない場合はパス
-- **場のリセット**: 全員がパスすると、場が空になり最後に出したプレイヤーから再開
-- **上がり**: 手札がすべてなくなったら上がり
-
-### ランク順（弱→強）
-```
-3 < 4 < 5 < 6 < 7 < 8 < 9 < 10 < J < Q < K < A < 2
-```
+---
 
 ## アーキテクチャ
 
-### ファイル構成
-- **app.py**: Streamlit UIメイン
-- **game_logic.py**: ゲームの規則とロジック
-- **ai_player.py**: Mistral AIプレイヤーの実装
-- **requirements.txt**: 依存パッケージ
+```
+Mistral_hack/
+├── app.py          # Streamlit UI（2カラム + インタラクションパネル）
+├── game_logic.py   # ゲームロジック + 関係値/同盟/会話システム
+├── ai_player.py    # Mistral AI統合（個性生成・会話・観察・行動決定）
+├── requirements.txt
+├── .streamlit/
+│   └── config.toml # ダークテーマ設定
+└── docs/
+    └── index.html  # GitHub Pages リダイレクト
+```
 
-### 主要クラス
+### 主要クラス・データ構造
 
-#### Card
-- トランプカードを表現
-- スート（♠♥♦♣）とランク（3-2）を保持
+#### `AIPersonality` (game_logic.py)
+```python
+@dataclass
+class AIPersonality:
+    player_name: str
+    character_name: str        # キャラ名
+    personality_desc: str      # 性格説明
+    speech_style: str          # 話し方
+    cheat_tendency: float      # ズル傾向 0.0〜1.0
+    cooperation_tendency: float
+    honesty: float             # 正直度
+    aggression: float
+    backstory: str
+```
 
-#### DaifugoGame
-- ゲーム全体のロジック
-- デッキ管理、手札配布、ゲーム状態管理
-- 有効な手の計算
-- ゲーム進行
+#### `DaifugoGame` の主なフィールド
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `relationships` | `Dict[str, Dict[str, int]]` | プレイヤー間関係値 -100〜+100 |
+| `alliances` | `Dict[str, Optional[str]]` | 同盟相手 |
+| `conversation_history` | `Dict[str, List[Dict]]` | 2人の会話ログ |
+| `info_revealed` | `Dict[str, List[str]]` | 判明した情報 |
+| `personalities` | `Dict[str, AIPersonality]` | AIキャラ設定 |
 
-#### MistralAIPlayer
-- Mistral APIを使ってAIプレイヤーを実装
-- ゲーム状況を分析して最適な手を決定
-- 心理戦を考慮した戦略的な判断
+#### `MistralAIPlayer` の主なメソッド
+| メソッド | 説明 |
+|---|---|
+| `generate_personality()` | AIキャラをMistralにJSON生成させる |
+| `generate_chat_response()` | 個性・関係値に基づく会話返答 |
+| `generate_observation()` | 観察ヒント（honesty次第で嘘も） |
+| `decide_action()` | 自発アクション決定（20%確率） |
+| `decide_move()` | カード選択（同盟・敵対を考慮） |
+| `decide_cheat_attempt()` | ズル判断（同盟相手は回避） |
 
-## Mistral AI統合
+---
 
-### AIの決定プロセス
+## Mistral API 呼び出し一覧
 
-1. **ゲーム状況の解析**
-   - 現在の手札
-   - 場に出ているカード
-   - 他のプレイヤーの手札枚数
-   - 現在の順位
+| タイミング | メソッド | 用途 |
+|---|---|---|
+| ゲーム開始時 | `generate_personality` | AIキャラ生成（AIプレイヤーごと1回） |
+| AIのターン | `decide_move` | カード選択 |
+| チャット返答 | `generate_chat_response` | 会話応答 |
+| 観察アクション | `generate_observation` | ヒント生成 |
+| ズルフェーズ | `generate_counter_measure` | 対策生成 |
+| ズルフェーズ | `evaluate_cheat_contest` | ズル対決評価（JSON返却） |
 
-2. **プロンプト生成**
-   - ゲーム情報をテキスト化
-   - 可能な手をリスト化
-   - 大富豪の戦略ガイドラインを提供
-
-3. **AI応答の解析**
-   - AIの選択肢番号を抽出
-   - 有効な手に変換
-   - エラーハンドリング
-
-### 考慮される戦略
-- 自分が上がることを優先
-- 強いカード（2, A, K）の温存
-- 他のプレイヤーの手札枚数への対応
-- リーダーの妨害
+---
 
 ## トラブルシューティング
 
-### "MISTRAL_API_KEYが設定されていません"エラー
-- `.env` ファイルが正しく設定されているか確認
-- YourMistral API キーが有効か確認
+### `MISTRAL_API_KEYが設定されていません`
+→ `.env` ファイルを確認、またはサイドバーのAPIキー欄に直接入力
 
-### AIが決定できないエラー
-- ネットワーク接続を確認
-- Mistral API キーの有効期限を確認
-- API の使用制限に達していないか確認
+### AIが応答しない / エラー
+→ ネットワーク接続・APIキー有効期限・使用制限を確認
+→ AIなしモード（チェックボックスOFF）でも遊べます
 
-### Streamlitの起動に失敗
+### Streamlit起動失敗
 ```bash
 pip install --upgrade streamlit
 streamlit run app.py
 ```
 
-## パフォーマンス最適化
-
-- メッセージ数の制限: API呼び出しを最小化
-- キャッシング: ゲーム状態の効率的な管理
-- 段階的なAI応答解析
-
-## 今後の機能拡張
-
-- [ ] 複数のAIモデルの選択（Mistral Large など）
-- [ ] ゲーム結果の統計・分析
-- [ ] マルチプレイネット機能
-- [ ] カスタムルール設定
-- [ ] リプレイ機能
-- [ ] AIの強度レベル選択
+---
 
 ## ライセンス
 
@@ -179,7 +197,7 @@ Mistral AI Hack Project 2026
 
 - [Mistral AI](https://mistral.ai/)
 - [Streamlit](https://streamlit.io/)
-- [大富豪（Wikipedia）](https://ja.wikipedia.org/wiki/大富豪)
+- [大富豪（Wikipedia）](https://ja.wikipedia.org/wiki/%E5%A4%A7%E5%AF%8C%E8%B1%AA_(%E3%83%88%E3%83%A9%E3%83%B3%E3%83%97))
 
 ---
 

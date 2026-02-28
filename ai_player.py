@@ -1,16 +1,20 @@
 """
 Mistral AIを使った大富豪のAIプレイヤー
+グノーシアEX的な心理戦とスキルシステム統合版
 """
 
 import json
 import random
 import re
-from typing import List, Optional, Dict
-from game_logic import Card, DaifugoGame, AIPersonality
+from typing import List, Optional, Dict, Tuple
+
 import os
 from mistralai import Mistral
 
-# フォールバック用のデフォルト個性定義
+from models import Card, AIPersonality, CharacterType, PlayerStats, SkillType
+from game_logic import DaifugoGame
+
+
 _DEFAULT_PERSONALITIES = [
     {
         "character_name": "謎の田中",
@@ -51,10 +55,8 @@ class MistralAIPlayer:
     def __init__(self, api_key: Optional[str] = None):
         if api_key is None:
             api_key = os.getenv("MISTRAL_API_KEY")
-
         if not api_key:
             raise ValueError("MISTRAL_API_KEYが設定されていません")
-
         self.client = Mistral(api_key=api_key)
         self.model = "mistral-small-latest"
 
@@ -63,7 +65,7 @@ class MistralAIPlayer:
     # -----------------------------------------------------------------------
 
     def generate_personality(self, player_name: str) -> AIPersonality:
-        """Mistral に個性 JSON を生成させる。失敗時はフォールバック。"""
+        """Mistral にキャラクター設定をJSON生成させる。失敗時はフォールバック。"""
         try:
             prompt = f"""大富豪カードゲームのAIプレイヤー「{player_name}」のキャラクター設定を作ってください。
 
@@ -102,30 +104,19 @@ class MistralAIPlayer:
         except Exception as e:
             print(f"generate_personality error: {e}")
 
-        # フォールバック: インデックスでデフォルト個性を選択
-        player_num = int(player_name.replace("Player ", "")) - 2  # Player 2 → 0
-        defaults = _DEFAULT_PERSONALITIES
-        d = defaults[player_num % len(defaults)]
-        return AIPersonality(
-            player_name=player_name,
-            character_name=d["character_name"],
-            personality_desc=d["personality_desc"],
-            speech_style=d["speech_style"],
-            cheat_tendency=d["cheat_tendency"],
-            cooperation_tendency=d["cooperation_tendency"],
-            honesty=d["honesty"],
-            aggression=d["aggression"],
-            backstory=d["backstory"]
-        )
+        # フォールバック
+        player_num = int(player_name.replace("Player ", "")) - 2
+        d = _DEFAULT_PERSONALITIES[player_num % len(_DEFAULT_PERSONALITIES)]
+        return AIPersonality(player_name=player_name, **d)
 
     # -----------------------------------------------------------------------
-    # チャット応答生成
+    # チャット応答
     # -----------------------------------------------------------------------
 
     def generate_chat_response(self, message: str, sender: str,
                                target_personality: AIPersonality,
                                context: dict) -> str:
-        """AIキャラクターとしてチャットに返答する"""
+        """AIキャラクターとして会話に返答する"""
         p = target_personality
         system_prompt = (
             f"あなたは大富豪ゲームをプレイしている「{p.character_name}」です。\n"
@@ -138,10 +129,10 @@ class MistralAIPlayer:
         if p.cooperation_tendency > 0.7:
             system_prompt += "あなたは協力的な姿勢を見せやすいです。\n"
 
-        relationship_val = context.get("relationship", 0)
-        if relationship_val < -30:
+        rel = context.get("relationship", 0)
+        if rel < -30:
             system_prompt += "この相手とは関係が悪いので、やや警戒した返答をしてください。\n"
-        elif relationship_val > 30:
+        elif rel > 30:
             system_prompt += "この相手とは仲が良いので、フレンドリーに返してください。\n"
 
         try:
@@ -165,10 +156,8 @@ class MistralAIPlayer:
 
     def generate_observation(self, target: str, personality: AIPersonality,
                              game_info: dict) -> str:
-        """observeアクションでターゲットに関するヒントを返す"""
+        """observeアクション用のヒントを生成する"""
         card_count = game_info.get("player_card_count", {}).get(target, "不明")
-
-        # honesty が低い場合は嘘の情報を交えることがある
         is_honest = personality.honesty > 0.5 or random.random() < personality.honesty
         try:
             if is_honest:
@@ -214,92 +203,89 @@ class MistralAIPlayer:
         if not personality:
             return None
 
-        # 関係値に基づいてターゲットを選ぶ
         rels = game.relationships.get(player_name, {})
         sorted_others = sorted(active_others, key=lambda p: rels.get(p, 0))
         least_liked = sorted_others[0]
         most_liked = sorted_others[-1]
 
-        rel_with_least = rels.get(least_liked, 0)
-        rel_with_most = rels.get(most_liked, 0)
-
-        # 敵対相手に accuse/threaten、友好相手に cooperate
-        action_weights = {
+        # アクション種別の重みを関係値・個性から計算
+        weights = {
             "chat": 0.5,
-            "cooperate": max(0.1, personality.cooperation_tendency * (rel_with_most + 100) / 200),
-            "accuse": max(0.05, personality.aggression * max(0, -rel_with_least) / 100),
+            "cooperate": max(0.1, personality.cooperation_tendency
+                             * (rels.get(most_liked, 0) + 100) / 200),
+            "accuse": max(0.05, personality.aggression
+                          * max(0, -rels.get(least_liked, 0)) / 100),
         }
-        total = sum(action_weights.values())
+        total = sum(weights.values())
         r = random.random() * total
+        chosen = "chat"
         cumulative = 0.0
-        chosen_type = "chat"
-        for action_type, weight in action_weights.items():
+        for action_type, weight in weights.items():
             cumulative += weight
             if r <= cumulative:
-                chosen_type = action_type
+                chosen = action_type
                 break
 
-        if chosen_type == "cooperate":
-            target = most_liked
-        elif chosen_type == "accuse":
-            target = least_liked
-        else:
-            target = random.choice(active_others)
+        target = most_liked if chosen == "cooperate" else (
+            least_liked if chosen == "accuse" else random.choice(active_others)
+        )
 
         messages_by_type = {
-            "chat": [
-                "調子はどう？", "この勝負、楽しんでる？",
-                "なかなかやるね。", "気を抜いてると負けるよ？"
-            ],
-            "cooperate": [
-                "ねえ、一緒に戦わない？", "同盟を組もうよ！",
-                "協力すれば二人とも得するよ。", "手を組まない？"
-            ],
-            "accuse": [
-                "ズルしてない？怪しいな。", "なんか変なことしてない？",
-                "さっきの手、おかしくなかった？", "気をつけてるよ、ちゃんと見てるから。"
-            ],
+            "chat": ["調子はどう？", "この勝負、楽しんでる？",
+                     "なかなかやるね。", "気を抜いてると負けるよ？"],
+            "cooperate": ["ねえ、一緒に戦わない？", "同盟を組もうよ！",
+                          "協力すれば二人とも得するよ。", "手を組まない？"],
+            "accuse": ["ズルしてない？怪しいな。", "なんか変なことしてない？",
+                       "さっきの手、おかしくなかった？", "ちゃんと見てるから。"],
         }
-        message = random.choice(messages_by_type.get(chosen_type, ["..."]))
-
-        return {
-            "type": chosen_type,
-            "target": target,
-            "message": message
-        }
+        message = random.choice(messages_by_type.get(chosen, ["..."]))
+        return {"type": chosen, "target": target, "message": message}
 
     # -----------------------------------------------------------------------
-    # カード選択
+    # カード選択（感情マトリクス統合版）
     # -----------------------------------------------------------------------
 
-    def decide_move(self,
-                    game: DaifugoGame,
-                    player_name: str,
+    def decide_move(self, game: DaifugoGame, player_name: str,
                     valid_moves: List[List[Card]]) -> List[Card]:
-        """Mistral AIがカードの出し方を決定する"""
+        """
+        Mistral AIがカードの出し方を決定する
+        感情マトリクス（Affinity + Fear）とキャラクター性を考慮
+        """
         game_info = game.get_game_info()
         hand = game.player_hands[player_name]
-
+        
+        # キャラクター性に基づく基本的な動きの傾向
+        char_type = game.character_types.get(player_name, CharacterType.LOGICAL)
+        
         # 関係値による追加ヒント
         alliance = game.alliances.get(player_name)
         rels = game.relationships.get(player_name, {})
-        enemies = [p for p, v in rels.items() if v <= -60
-                   and p not in game.ranking and p not in game.caught_players]
-
-        relationship_hint = ""
+        fears = game.fear_levels.get(player_name, {})
+        
+        enemies = [p for p, v in rels.items()
+                   if v <= -60
+                   and p not in game.ranking
+                   and p not in game.caught_players]
+        
+        relationship_hint = f"\n【関係値ヒント】\n"
         if alliance and alliance not in game.ranking and alliance not in game.caught_players:
-            relationship_hint += f"\n- {alliance}と同盟中。{alliance}を有利にするプレイも考慮してください。"
+            relationship_hint += f"- {alliance}と同盟中。{alliance}を有利にするプレイも考慮。\n"
         if enemies:
-            relationship_hint += f"\n- {', '.join(enemies)}とは敵対関係。妨害を優先してください。"
+            relationship_hint += f"- 敵対関係: {', '.join(enemies)}。妨害を優先。\n"
+        
+        for p, fear_level in fears.items():
+            if fear_level > 60:
+                relationship_hint += f"- {p}を恐れている。強気に出られない。\n"
+            elif fear_level < -60:
+                relationship_hint += f"- {p}を見下している。大胆に行動できる。\n"
+        
+        relationship_hint += f"\n【キャラクター性】\n{char_type.value}型"
 
-        prompt = self._build_prompt(
-            player_name=player_name,
-            hand=hand,
-            valid_moves=valid_moves,
-            game_info=game_info,
-            relationship_hint=relationship_hint
+        prompt = self._build_move_prompt(
+            player_name, hand, valid_moves, game_info, 
+            relationship_hint, personality=game.personalities.get(player_name)
         )
-
+        
         try:
             response = self.client.chat.complete(
                 model=self.model,
@@ -307,55 +293,58 @@ class MistralAIPlayer:
                 temperature=0.7,
                 max_tokens=200
             )
-            ai_response = response.choices[0].message.content
-            return self._parse_response(ai_response, valid_moves)
+            selected_move = self._parse_move_response(response.choices[0].message.content, valid_moves)
+            
+            # 感情マトリクスの修正適用（AIが選んだ後、キャラクター性で微調整）
+            modified = self._apply_emotion_matrix(game, player_name, selected_move, valid_moves)
+            return modified
         except Exception as e:
-            print(f"AI Error: {e}")
+            print(f"decide_move error: {e}")
             return valid_moves[0] if valid_moves else []
 
-    def _build_prompt(self,
-                      player_name: str,
-                      hand: List[Card],
-                      valid_moves: List[List[Card]],
-                      game_info: dict,
-                      relationship_hint: str = "") -> str:
-        """AIへのプロンプトを構築"""
-        hand_str = ", ".join(str(card) for card in hand)
-        last_played_str = (
-            ", ".join(str(card) for card in game_info['last_played'])
-            if game_info['last_played'] else "なし"
+    def _build_move_prompt(self, player_name: str, hand: List[Card],
+                           valid_moves: List[List[Card]], game_info: dict,
+                           relationship_hint: str = "", personality=None) -> str:
+        hand_str = ", ".join(str(c) for c in hand)
+        last_str = (", ".join(str(c) for c in game_info['last_played'])
+                    if game_info['last_played'] else "なし")
+        moves_str = "\n".join(
+            f"{i}: {', '.join(str(c) for c in m) if m else 'パス'}"
+            for i, m in enumerate(valid_moves[:5])
         )
-        moves_description = "\n".join([
-            f"{i}: {', '.join(str(c) for c in move) if move else 'パス'}"
-            for i, move in enumerate(valid_moves[:5])
-        ])
-
-        prompt = f"""あなたは大富豪というトランプゲームをプレイしています。
+        
+        character_context = ""
+        if personality:
+            character_context = f"\n【あなたの個性】\n{personality.character_name}\n{personality.personality_desc}\n"
+        
+        return f"""あなたは大富豪というトランプゲームをプレイしています。
 
 現在のプレイヤー: {player_name}
-あなたの手札: {hand_str}
+あなたの手札: {hand_str}{character_context}
 
 ゲーム状況:
-- 最後に出されたカード: {last_played_str}
+- 最後に出されたカード: {last_str}
 - 最後に出したプレイヤー: {game_info['last_played_by']}
-- 各プレイヤーの手札枚数: {', '.join(f"{p}: {count}枚" for p, count in game_info['player_card_count'].items())}
+- 各プレイヤーの手札枚数: {', '.join(f"{p}: {n}枚" for p, n in game_info['player_card_count'].items())}
 - 現在の順位: {', '.join(game_info['ranking']) if game_info['ranking'] else 'なし'}
 
 可能な手（最初の5個）:
-{moves_description}
+{moves_str}
 
-大富豪のゲーム戦略を考えて、次に出すべきカードを決めてください。
-以下の戦略を考慮してください：
-1. 自分が上がることを優先する
-2. 強いカード（2, A, K）は温存する
-3. 他のプレイヤーの手札枚数を考慮する
-4. リーダーを妨害することも考慮する{relationship_hint}
+{relationship_hint}
+
+戦略:
+1. 自分が上がることを優先
+2. 強いカード（2, A, K）は温存
+3. 関係値と恐怖度を考慮した判断
+4. 同盟相手には協力的に
+5. 敵対相手には妨害的に
+6. あなたのキャラクター性に合わせたプレイスタイル
 
 あなたの判断と選択肢番号（0-{min(4, len(valid_moves)-1)}）を述べてください。"""
-        return prompt
 
-    def _parse_response(self, response: str, valid_moves: List[List[Card]]) -> List[Card]:
-        """AIのレスポンスから選択肢番号を抽出"""
+    def _parse_move_response(self, response: str,
+                             valid_moves: List[List[Card]]) -> List[Card]:
         numbers = re.findall(r'\d+', response)
         if numbers:
             try:
@@ -364,19 +353,47 @@ class MistralAIPlayer:
                     return valid_moves[idx]
             except (ValueError, IndexError):
                 pass
-
-        if any(skip_word in response for skip_word in ["パス", "出さない", "パスします"]):
+        if any(w in response for w in ["パス", "出さない", "パスします"]):
             return valid_moves[0]
-
         return valid_moves[0] if valid_moves else []
+
+    def _apply_emotion_matrix(self, game: DaifugoGame, player_name: str,
+                              ai_move: List[Card], valid_moves: List[List[Card]]) -> List[Card]:
+        """
+        感情マトリクスに基づいて微調整。
+        オーバーキル、萎縮、など。
+        """
+        if not game.last_played_by:
+            return ai_move
+        
+        target = game.last_played_by
+        affinity = game.relationships.get(player_name, {}).get(target, 0)
+        fear = game.fear_levels.get(player_name, {}).get(target, 0)
+        char_type = game.character_types.get(player_name, CharacterType.LOGICAL)
+        
+        # オーバーキル（ヘイト出し）
+        if affinity < -60 and char_type == CharacterType.VENGEFUL:
+            # 嫌いな相手へ：最強カードでオーバーキル
+            for move in reversed(valid_moves):
+                if move and move != ai_move:
+                    return move
+        
+        # 萎縮（Fear による弱気な出し）
+        if fear > 60 and ai_move and ai_move != valid_moves[0]:
+            # 恐れている相手：弱めのカードを出す
+            for move in valid_moves:
+                if move and move[0].get_rank_value() < ai_move[0].get_rank_value():
+                    return move
+        
+        return ai_move
 
     # -----------------------------------------------------------------------
     # ズルフェーズ
     # -----------------------------------------------------------------------
 
-    def generate_counter_measure(self, game: DaifugoGame, target_player: str,
-                                 cheat_prompt: str) -> str:
-        """ズルへの対策プロンプトを生成する"""
+    def generate_counter_measure(self, game: DaifugoGame,
+                                 target_player: str, cheat_prompt: str) -> str:
+        """ズルへの対策文を生成する"""
         try:
             prompt = f"""大富豪ゲームでズルが試みられています。
 
@@ -396,8 +413,9 @@ class MistralAIPlayer:
 
     def evaluate_cheat_contest(self, cheat_prompt: str, counter_prompt: str,
                                game_info: dict) -> dict:
-        """ズル対決をMistralに評価させる"""
-        default = {"cheat_bonus": 1, "counter_bonus": 1, "effect_type": "peek", "reasoning": "デフォルト判定"}
+        """ズル対決の強度をMistralに評価させる（JSON返却）"""
+        default = {"cheat_bonus": 1, "counter_bonus": 1,
+                   "effect_type": "peek", "reasoning": "デフォルト判定"}
         try:
             prompt = f"""大富豪ゲームのズル対決を評価してください。
 
@@ -426,51 +444,43 @@ effect_typeの選び方:
                 result["counter_bonus"] = max(0, min(3, int(result.get("counter_bonus", 1))))
                 if result.get("effect_type") not in ["peek", "swap", "skip", "extra_cards"]:
                     result["effect_type"] = "peek"
-                if "reasoning" not in result:
-                    result["reasoning"] = ""
+                result.setdefault("reasoning", "")
                 return result
         except Exception as e:
-            print(f"Evaluate error: {e}")
+            print(f"evaluate_cheat_contest error: {e}")
         return default
 
-    def decide_cheat_attempt(self, game: DaifugoGame, player_name: str) -> Optional[Dict]:
-        """AIがズルを試みるかどうか決定する"""
+    def decide_cheat_attempt(self, game: DaifugoGame,
+                             player_name: str) -> Optional[Dict]:
+        """AIがズルを試みるか決定する。試みる場合は {target, prompt} を返す。"""
         personality = game.personalities.get(player_name)
         cheat_prob = personality.cheat_tendency if personality else 0.3
-
         if random.random() > cheat_prob:
             return None
 
         active = [p for p in game.players
-                  if p not in game.ranking and p not in game.caught_players and p != player_name]
+                  if p not in game.ranking
+                  and p not in game.caught_players
+                  and p != player_name]
         if not active:
             return None
 
-        # 同盟相手は攻撃しない（確率大幅低下）
+        # 同盟相手は攻撃しない
         ally = game.alliances.get(player_name)
-        non_ally = [p for p in active if p != ally]
+        candidates = [p for p in active if p != ally] or active
 
-        # 関係値が低い相手を優先ターゲット
+        # 関係値が最も低い相手を優先
         rels = game.relationships.get(player_name, {})
-        candidate_pool = non_ally if non_ally else active
-        target = min(candidate_pool, key=lambda p: rels.get(p, 0))
+        target = min(candidates, key=lambda p: rels.get(p, 0))
 
-        methods = [
-            "手札を盗み見る",
-            "手札を入れ替える",
-            "行動を妨害する",
-            "余分なカードを押し付ける"
-        ]
-        approaches = ["素早い動きで", "言葉で惑わして", "隙をついて", "表情で騙して"]
-        confidences = ["完璧な計画で", "運を頼りに", "慎重に", "大胆に"]
-
-        method = random.choice(methods)
-        approach = random.choice(approaches)
-        confidence = random.choice(confidences)
-        cheat_prompt = f"{confidence}、{approach}、{target}の{method}"
-        return {"target": target, "prompt": cheat_prompt}
+        method = random.choice(["手札を盗み見る", "手札を入れ替える",
+                                 "行動を妨害する", "余分なカードを押し付ける"])
+        approach = random.choice(["素早い動きで", "言葉で惑わして", "隙をついて", "表情で騙して"])
+        confidence = random.choice(["完璧な計画で", "運を頼りに", "慎重に", "大胆に"])
+        return {"target": target,
+                "prompt": f"{confidence}、{approach}、{target}の{method}"}
 
 
 def make_random_move(valid_moves: List[List[Card]]) -> List[Card]:
-    """ランダムに手を選ぶ（AIが使用不可の場合のフォールバック）"""
+    """AI未設定時のランダムフォールバック"""
     return random.choice(valid_moves)

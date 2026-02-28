@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(head:*)",
+      "Bash(cd /c/Users/Lucas/Documents/GitHub/Mistral_hack && python -m pip install -r requirements.txt 2>&1)",
+      "Bash(cd:*)",
+      "Bash(cd C:/Users/Lucas/Documents/GitHub/Mistral_hack && python -c \"import game_logic; print\\('game_logic OK'\\)\" && python -c \"import ai_player; print\\('ai_player OK'\\)\" 2>&1)",
+      "Bash(streamlit run:*)",
+      "Bash(python:*)"
+    ]
+  }
+}
